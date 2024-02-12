@@ -72,6 +72,11 @@ func (s *TestStack) AddInterfaceAddr(idx int32, addr InterfaceAddr) error {
 	return nil
 }
 
+// AddInterface implements Stack.AddInterface.
+func (s *TestStack) AddInterface(req *InterfaceRequest) error {
+	panic("unimplemented")
+}
+
 // RemoveInterfaceAddr implements Stack.
 func (s *TestStack) RemoveInterfaceAddr(idx int32, addr InterfaceAddr) error {
 	interfaceAddrs, ok := s.InterfaceAddrsMap[idx]

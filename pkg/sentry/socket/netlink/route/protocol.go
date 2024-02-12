@@ -161,6 +161,94 @@ func (p *Protocol) getLink(ctx context.Context, msg *netlink.Message, ms *netlin
 	return nil
 }
 
+const defaultMTU = 1500
+
+func (p *Protocol) createNewLink(ctx context.Context, stack inet.Stack, msg *netlink.Message, attrs map[uint16]netlink.BytesView) *syserr.Error {
+	var (
+		ifinfomsg     linux.InterfaceInfoMessage
+		linkInfoData  map[uint16]netlink.BytesView
+		linkInfoAttrs map[uint16]netlink.BytesView
+		ifname        string
+		kind          string
+	)
+	if v, ok := attrs[linux.IFLA_IFNAME]; ok {
+		ifname = v.String()
+	}
+	if v, ok := attrs[linux.IFLA_LINKINFO]; ok {
+		linkInfoAttrs, ok = netlink.AttrsView(v).Parse()
+		if !ok {
+			return syserr.ErrInvalidArgument
+		}
+
+		for attr := range linkInfoAttrs {
+			value := linkInfoAttrs[attr]
+			switch attr {
+			case linux.IFLA_INFO_KIND:
+				kind = value.String()
+			case linux.IFLA_INFO_DATA:
+				linkInfoData, ok = netlink.AttrsView(value).Parse()
+				if !ok {
+					return syserr.ErrInvalidArgument
+				}
+
+			default:
+				ctx.Warningf("unexpected link info attribute: %x", attr)
+				return syserr.ErrNotSupported
+			}
+		}
+	}
+
+	switch kind {
+	case "veth":
+		pairReq := &inet.VethPeerReq{
+			Stack: stack,
+			Req: inet.InterfaceRequest{
+				MTU: defaultMTU,
+			},
+		}
+		if linkInfoData != nil {
+			if v, ok := linkInfoData[linux.VETH_INFO_PEER]; ok {
+				attrsView := netlink.AttrsView(v[ifinfomsg.SizeBytes():])
+				if !ok {
+					return syserr.ErrInvalidArgument
+				}
+				attrs, ok := attrsView.Parse()
+				if !ok {
+					return syserr.ErrInvalidArgument
+				}
+				if v, ok = attrs[linux.IFLA_IFNAME]; ok {
+					pairReq.Req.Name = v.String()
+				}
+				if v, ok = attrs[linux.IFLA_NET_NS_FD]; ok {
+					fd, ok := v.Uint32()
+					if !ok {
+						return syserr.ErrInvalidArgument
+					}
+					f := inet.NamespaceByFDFromContext(ctx)
+					if f == nil {
+						return syserr.ErrInvalidArgument
+					}
+					ns, err := f(int32(fd))
+					if err != nil {
+						return syserr.FromError(err)
+					}
+					defer ns.DecRef(ctx)
+					pairReq.Stack = ns.Stack()
+				}
+			}
+		}
+		req := &inet.InterfaceRequest{
+			Kind: kind,
+			Name: ifname,
+			Data: pairReq,
+			MTU:  defaultMTU,
+		}
+		return syserr.FromError(stack.AddInterface(req))
+	default:
+		return syserr.ErrNotSupported
+	}
+}
+
 func (p *Protocol) newLink(ctx context.Context, msg *netlink.Message, ms *netlink.MessageSet) *syserr.Error {
 	stack := inet.StackFromContext(ctx)
 	if stack == nil {
@@ -169,18 +257,18 @@ func (p *Protocol) newLink(ctx context.Context, msg *netlink.Message, ms *netlin
 	}
 
 	var ifinfomsg linux.InterfaceInfoMessage
-	attrs, ok := msg.GetData(&ifinfomsg)
+	attrsView, ok := msg.GetData(&ifinfomsg)
 	if !ok {
 		return syserr.ErrInvalidArgument
 	}
-	for !attrs.Empty() {
-		// The index is unspecified, search by the interface name.
-		ahdr, value, rest, ok := attrs.ParseFirst()
-		if !ok {
-			return syserr.ErrInvalidArgument
-		}
-		attrs = rest
-		switch ahdr.Type {
+	attrs, ok := attrsView.Parse()
+	if !ok {
+		return syserr.ErrInvalidArgument
+	}
+	ifname := ""
+	for attr := range attrs {
+		value := attrs[attr]
+		switch attr {
 		case linux.IFLA_IFNAME:
 			if len(value) < 1 {
 				return syserr.ErrInvalidArgument
@@ -189,23 +277,27 @@ func (p *Protocol) newLink(ctx context.Context, msg *netlink.Message, ms *netlin
 				// Device name changing isn't supported yet.
 				return syserr.ErrNotSupported
 			}
-			ifname := string(value[:len(value)-1])
+			ifname = value.String()
 			for idx, ifa := range stack.Interfaces() {
 				if ifname == ifa.Name {
 					ifinfomsg.Index = idx
 					break
 				}
 			}
+		case linux.IFLA_LINKINFO:
 		default:
-			ctx.Warningf("unexpected attribute: %x", ahdr.Type)
+			ctx.Warningf("unexpected attribute: %x", attr)
 			return syserr.ErrNotSupported
 		}
 	}
+	flags := msg.Header().Flags
 	if ifinfomsg.Index == 0 {
+		if flags&linux.NLM_F_CREATE != 0 {
+			return p.createNewLink(ctx, stack, msg, attrs)
+		}
 		return syserr.ErrNoDevice
 	}
 
-	flags := msg.Header().Flags
 	if flags&linux.NLM_F_EXCL != 0 {
 		return syserr.ErrExists
 	}

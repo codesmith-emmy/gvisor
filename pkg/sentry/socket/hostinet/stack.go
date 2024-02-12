@@ -166,6 +166,11 @@ func (s *Stack) InterfaceAddrs() map[int32][]inet.InterfaceAddr {
 	return addrs
 }
 
+// AddInterface implements inet.Stack.AddInterface.
+func (s *Stack) AddInterface(req *inet.InterfaceRequest) error {
+	return linuxerr.EOPNOTSUPP
+}
+
 // AddInterfaceAddr implements inet.Stack.AddInterfaceAddr.
 func (*Stack) AddInterfaceAddr(idx int32, addr inet.InterfaceAddr) error {
 	return addInterfaceAddr(idx, addr)

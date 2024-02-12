@@ -26,6 +26,9 @@ import (
 	"gvisor.dev/gvisor/pkg/syserr"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/ethernet"
+	"gvisor.dev/gvisor/pkg/tcpip/link/packetsocket"
+	"gvisor.dev/gvisor/pkg/tcpip/link/veth"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -98,6 +101,38 @@ func (s *Stack) RemoveInterface(idx int32) error {
 	}
 
 	return syserr.TranslateNetstackError(s.Stack.RemoveNIC(nic)).ToError()
+}
+
+// AddInterface implements inet.Stack.AddInterface.
+func (s *Stack) AddInterface(req *inet.InterfaceRequest) error {
+	peerReq := req.Data.(*inet.VethPeerReq)
+	peerStack := peerReq.Stack.(*Stack)
+	ep, peerEP := veth.NewPair(req.MTU)
+	id := tcpip.NICID(s.Stack.UniqueID())
+	peerID := tcpip.NICID(peerStack.Stack.UniqueID())
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("veth%d", id)
+	}
+	err := s.Stack.CreateNICWithOptions(id, packetsocket.New(ethernet.New(ep)), stack.NICOptions{
+		Name: req.Name,
+	})
+	if err != nil {
+		return syserr.TranslateNetstackError(err).ToError()
+	}
+	ep.SetStack(s.Stack, id)
+
+	if peerReq.Req.Name == "" {
+		peerReq.Req.Name = fmt.Sprintf("veth%d", peerID)
+	}
+	err = peerStack.Stack.CreateNICWithOptions(peerID, packetsocket.New(ethernet.New(peerEP)), stack.NICOptions{
+		Name: peerReq.Req.Name,
+	})
+	if err != nil {
+		peerEP.Close()
+		return syserr.TranslateNetstackError(err).ToError()
+	}
+	peerEP.SetStack(peerStack.Stack, id)
+	return nil
 }
 
 // InterfaceAddrs implements inet.Stack.InterfaceAddrs.
