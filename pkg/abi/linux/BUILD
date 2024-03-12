@@ -78,6 +78,8 @@ go_library(
         "tty.go",
         "uio.go",
         "utsname.go",
+        "vfio.go",
+        "vfio_unsafe.go",
         "wait.go",
         "xattr.go",
     ],
