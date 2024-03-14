@@ -8,12 +8,12 @@ go_library(
     name = "tpuproxy",
     srcs = [
         "device.go",
+        "ioctl_unsafe.go",
         "seccomp_filter.go",
         "tpu.go",
         "tpu_mmap.go",
         "vfio.go",
         "vfio_mmap.go",
-        "vfio_unsafe.go",
     ],
     visibility = [
         "//pkg/sentry:internal",
@@ -30,6 +30,7 @@ go_library(
         "//pkg/safemem",
         "//pkg/seccomp",
         "//pkg/sentry/arch",
+        "//pkg/sentry/fsimpl/eventfd",
         "//pkg/sentry/kernel",
         "//pkg/sentry/memmap",
         "//pkg/sentry/vfs",
